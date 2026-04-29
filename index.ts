@@ -18,7 +18,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,6 +27,18 @@ const EXTENSION_DIR = __dirname;
 const CONFIG_DIR = join(EXTENSION_DIR, "..", ".pi", "cron-scheduler");
 const CONFIG_FILE = join(CONFIG_DIR, "jobs.json");
 const CACHE_FILE = join(CONFIG_DIR, "report-cache.json");
+const LOG_FILE = join(CONFIG_DIR, "scheduler.log");
+
+// ── Logger ────────────────────────────────────────────────────────────
+function log(msg: string): void {
+  const ts = new Date().toISOString();
+  try {
+    ensureConfigDir();
+    appendFileSync(LOG_FILE, `[${ts}] ${msg}\n`);
+  } catch {
+    // Best-effort logging — fail silently if disk write fails
+  }
+}
 
 const DAEMON_URL = "http://127.0.0.1:3034";
 
@@ -160,7 +172,7 @@ async function sendToDaemon(platform: string, message: string, retries = 3): Pro
       
       return false;
     } catch (err: any) {
-      console.log(`[cron-scheduler] sendToDaemon error: ${err.message}`);
+      log(`[cron-scheduler] sendToDaemon error: ${err.message}`);
       if (attempt < retries) {
         await new Promise(r => setTimeout(r, 2000));
         continue;
@@ -190,9 +202,9 @@ async function webSearch(query: string, signal?: AbortSignal): Promise<SearchRes
     if (results.length > 0) {
       return results;
     }
-    console.log(`[cron-scheduler] DDG empty results for: ${query}`);
+    log(`[cron-scheduler] DDG empty results for: ${query}`);
   } catch (err) {
-    console.log(`[cron-scheduler] DDG search failed: ${err}`);
+    log(`[cron-scheduler] DDG search failed: ${err}`);
   }
   return [];
 }
@@ -288,7 +300,7 @@ async function fetchGitHubTrending(): Promise<GitHubRepo[]> {
     });
     
     if (!res.ok) {
-      console.log(`[cron-scheduler] GitHub API error: ${res.status}`);
+      log(`[cron-scheduler] GitHub API error: ${res.status}`);
       return getCachedGitHubRepos();
     }
     
@@ -304,7 +316,7 @@ async function fetchGitHubTrending(): Promise<GitHubRepo[]> {
     
     return repos;
   } catch (err) {
-    console.log(`[cron-scheduler] GitHub fetch failed: ${err}`);
+    log(`[cron-scheduler] GitHub fetch failed: ${err}`);
     return getCachedGitHubRepos();
   }
 }
@@ -343,16 +355,16 @@ async function buildMorningReport(): Promise<string> {
   const divider = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
   const thinLine = "──────────────────────────────";
   
-  console.log("[cron-scheduler] Fetching GitHub trending...");
+  log("[cron-scheduler] Fetching GitHub trending...");
   const githubRepos = await fetchGitHubTrending();
   
-  console.log("[cron-scheduler] Searching for AI models...");
+  log("[cron-scheduler] Searching for AI models...");
   const aiModels = await webSearch("new AI model released yesterday");
   
-  console.log("[cron-scheduler] Searching for cheap providers...");
+  log("[cron-scheduler] Searching for cheap providers...");
   const cheapProviders = await webSearch("new cheap AI API free tier announced yesterday");
   
-  console.log("[cron-scheduler] Searching for AI trends...");
+  log("[cron-scheduler] Searching for AI trends...");
   const trends = await webSearch("AI news trends yesterday");
   
   // Build report
@@ -423,7 +435,7 @@ async function buildMorningReport(): Promise<string> {
   // Save to cache
   saveCache({ githubRepos, aiModels, cheapProviders, trends });
   
-  console.log("[cron-scheduler] Report built successfully");
+  log("[cron-scheduler] Report built successfully");
   return report;
 }
 
@@ -468,24 +480,24 @@ export default function cronSchedulerExtension(pi: ExtensionAPI) {
   async function runMorningReport(job: CronJob, ctx?: ExtensionContext): Promise<void> {
     try {
       const daemonOk = await isDaemonRunning();
-      console.log(`[cron-scheduler] Daemon running: ${daemonOk}`);
+      log(`[cron-scheduler] Daemon running: ${daemonOk}`);
       
       if (!daemonOk) {
-        console.log("[cron-scheduler] Daemon offline, skipping report");
+        log("[cron-scheduler] Daemon offline, skipping report");
         job.lastResult = "failed: daemon offline";
         if (ctx) updateStatusUI(ctx, "🔴 Daemon offline");
         return;
       }
       
-      console.log("[cron-scheduler] Calling sendToDaemon...");
+      log("[cron-scheduler] Calling sendToDaemon...");
       const started = await sendToDaemon("discord", 
         `🤖 *Morning Report being generated...*\n\n📡 Scraping latest AI trends...\n\n_This may take a moment..._`
       );
-      console.log(`[cron-scheduler] Initial message sent: ${started}`);
-      console.log(`[cron-scheduler] Type of started: ${typeof started}`);
+      log(`[cron-scheduler] Initial message sent: ${started}`);
+      log(`[cron-scheduler] Type of started: ${typeof started}`);
       
       if (!started) {
-        console.log("[cron-scheduler] Failed to send initial message");
+        log("[cron-scheduler] Failed to send initial message");
         job.lastResult = "failed: could not send initial message";
         if (ctx) updateStatusUI(ctx, "🔴 Send failed");
         return;
@@ -493,23 +505,23 @@ export default function cronSchedulerExtension(pi: ExtensionAPI) {
       
       if (ctx) updateStatusUI(ctx, "🔄 Searching...");
       
-      console.log("[cron-scheduler] Building report...");
+      log("[cron-scheduler] Building report...");
       const reportContent = await buildMorningReport();
-      console.log(`[cron-scheduler] Report built, length: ${reportContent.length}`);
+      log(`[cron-scheduler] Report built, length: ${reportContent.length}`);
       
       // Discord limit is 2000 chars - split if needed
       if (reportContent.length > 1900) {
         const parts = splitMessage(reportContent, 1900);
-        console.log(`[cron-scheduler] Splitting report into ${parts.length} parts`);
+        log(`[cron-scheduler] Splitting report into ${parts.length} parts`);
         
         for (let i = 0; i < parts.length; i++) {
-          console.log(`[cron-scheduler] Sending part ${i+1}/${parts.length} (${parts[i].length} chars)...`);
+          log(`[cron-scheduler] Sending part ${i+1}/${parts.length} (${parts[i].length} chars)...`);
           
           // Wait 3s between parts to avoid rate limiting
           if (i > 0) await new Promise(r => setTimeout(r, 3000));
           
           const partSent = await sendToDaemon("discord", parts[i]);
-          console.log(`[cron-scheduler] Part ${i+1} sent: ${partSent}`);
+          log(`[cron-scheduler] Part ${i+1} sent: ${partSent}`);
           
           if (!partSent) {
             job.lastResult = `failed: send error part ${i+1}`;
@@ -521,21 +533,21 @@ export default function cronSchedulerExtension(pi: ExtensionAPI) {
         return;
       }
       
-      console.log("[cron-scheduler] Sending final report...");
-      console.log(`[cron-scheduler] Report preview: ${reportContent.slice(0, 100)}...`);
+      log("[cron-scheduler] Sending final report...");
+      log(`[cron-scheduler] Report preview: ${reportContent.slice(0, 100)}...`);
       
       // Add delay to avoid rate limiting
-      console.log("[cron-scheduler] Waiting 5s to avoid Discord rate limiting...");
+      log("[cron-scheduler] Waiting 5s to avoid Discord rate limiting...");
       await new Promise(r => setTimeout(r, 5000));
       
-      console.log(`[cron-scheduler] Starting second daemon call...`);
+      log(`[cron-scheduler] Starting second daemon call...`);
       const sent = await sendToDaemon("discord", reportContent);
-      console.log(`[cron-scheduler] Final report sent result: ${sent}`);
+      log(`[cron-scheduler] Final report sent result: ${sent}`);
       
       if (sent) {
         job.lastResult = "success";
         job.lastRun = Date.now();
-        console.log("[cron-scheduler] Morning report sent successfully");
+        log("[cron-scheduler] Morning report sent successfully");
         if (ctx) updateStatusUI(ctx, "✅ Report sent");
       } else {
         job.lastResult = "failed: send error";
@@ -543,7 +555,7 @@ export default function cronSchedulerExtension(pi: ExtensionAPI) {
       }
     } catch (err: any) {
       job.lastResult = `error: ${err.message}`;
-      console.error(`[cron-scheduler] Report failed: ${err.message}`);
+      log(`[cron-scheduler] Report failed: ${err.message}`);
       if (ctx) updateStatusUI(ctx, `🔴 ${err.message}`);
     }
     
@@ -561,7 +573,7 @@ export default function cronSchedulerExtension(pi: ExtensionAPI) {
       if (!nextRun) continue;
       
       if (Math.abs(now - nextRun.getTime()) < 60000) {
-        console.log(`[cron-scheduler] Running job: ${job.name}`);
+        log(`[cron-scheduler] Running job: ${job.name}`);
         
         if (job.action === "morning-report") {
           await runMorningReport(job, ctx);
@@ -818,7 +830,7 @@ export default function cronSchedulerExtension(pi: ExtensionAPI) {
         }
         
         for (const job of jobsToTest) {
-          console.log(`[cron-scheduler] Testing job: ${job.name}`);
+          log(`[cron-scheduler] Testing job: ${job.name}`);
           
           if (job.action === "morning-report") {
             await runMorningReport(job, ctx);
