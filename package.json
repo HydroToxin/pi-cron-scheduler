@@ -1,0 +1,9 @@
+{
+  "name": "@hydrotoxin/pi-cron-scheduler",
+  "version": "1.0.0",
+  "description": "Cron Scheduler Extension for pi - manages scheduled tasks and AI Morning Reports",
+  "keywords": ["pi-package", "cron", "scheduler", "morning-report"],
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}
